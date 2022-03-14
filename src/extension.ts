@@ -1,0 +1,177 @@
+// The module 'vscode' contains the VS Code extensibility API
+// Import the module and reference it with the alias vscode in your code below
+import * as vscode from 'vscode';
+import * as mdItContainer from 'markdown-it-container';
+
+import * as fs from 'fs';
+import * as path from 'path';
+
+// this method is called when your extension is activated
+// your extension is activated the very first time the command is executed
+export function activate(context: vscode.ExtensionContext) {
+
+	// Use the console to output diagnostic information (console.log) and errors (console.error)
+	// This line of code will only be executed once when your extension is activated
+	console.log('Congratulations, your extension "nutmap" is now active!');
+	
+    var panel: vscode.WebviewPanel;
+	let lastTimestamp = new Date().getTime();
+
+	let disposable = vscode.workspace.onDidChangeTextDocument(e => {
+        if (!e || !e.document || !e.document.uri) return;
+        lastTimestamp = new Date().getTime();
+        setTimeout(() => {
+            if (new Date().getTime() - lastTimestamp >= 400) {
+                console.log(e.document.languageId)
+                console.log(e.document.getText())
+                if(panel){
+                	panel.webview.postMessage({text: e.document.getText()});
+				}
+
+            }
+        }, 500);
+    });
+    context.subscriptions.push(disposable);
+
+  disposable = vscode.window.onDidChangeTextEditorSelection(e => {
+      if(e.textEditor.document.languageId != "nutmap"){
+        return;
+      }
+      lastTimestamp = new Date().getTime();
+      setTimeout(() => {
+          if (new Date().getTime() - lastTimestamp >= 400) {
+            console.log(e.textEditor.document.languageId)
+            console.log(e.textEditor.document.getText())
+            if(panel  && vscode.window.activeTextEditor){
+              panel.webview.postMessage({text: vscode.window.activeTextEditor.document.getText()});}
+          }
+      }, 500);
+  });
+  context.subscriptions.push(disposable);
+
+	disposable = vscode.commands.registerCommand('nutmap.showPreview', () => {
+        // Create and show panel
+
+        panel = vscode.window.createWebviewPanel(
+          'nutmap',
+          'Nutmap Preview',
+          vscode.ViewColumn.Two,
+          {enableScripts: true}
+        );
+		    let resourceRoot = path.join(context.extensionPath, "static");
+        // And set its HTML content
+        panel.webview.html = loadFile(panel.webview,resourceRoot,"index.html");
+        if(vscode.window.activeTextEditor){
+          panel.webview.postMessage(
+            {text: vscode.window.activeTextEditor.document.getText()}
+          );
+        }else{
+          console.log("no active text editor.")
+        }
+  });
+    
+  context.subscriptions.push(disposable);
+  const pluginKeyword = 'nutmap';
+    const tokenTypeInline = 'inline';
+    const ttContainerOpen = 'container_' + pluginKeyword + '_open';
+    const ttContainerClose = 'container_' + pluginKeyword + '_close';
+
+    return {
+        extendMarkdownIt(md:any) {
+            md.use(mdItContainer, pluginKeyword, {
+                anyClass: true,
+                validate: (info:string) => {
+                    return info.trim() === pluginKeyword;
+                },
+
+                render: (tokens:any, idx:any) => {
+                    const token = tokens[idx];
+
+                    var src = '';
+                    if (token.type === ttContainerOpen) {
+                        for (var i = idx + 1; i < tokens.length; i++) {
+                            const value = tokens[i]
+                            if (value === undefined || value.type === ttContainerClose) {
+                                break;
+                            }
+                            src += value.content;
+                            if (value.block && value.nesting <= 0) {
+                                src += '\n';
+                            }
+                            // Clear these out so markdown-it doesn't try to render them
+                            value.tag = '';
+                            value.type = tokenTypeInline;
+                            value.content = '';
+                            value.children = [];
+                        }
+                    }
+
+                    if (token.nesting === 1) {
+                        return `<div class="${pluginKeyword}">${preProcess(src)}`;
+                    } else {
+                        return '</div>';
+                    }
+                }
+            });
+
+            const highlight = md.options.highlight;
+            md.options.highlight = (code:string, lang:string) => {
+                if (lang && lang.match(/\bnutmap\b/i)) {
+                    return `<pre style="all:unset;"><div class="${pluginKeyword}">${preProcess(code)}</div></pre>`;
+                }
+                return highlight(code, lang);
+            };
+            return md;
+        }
+    }
+}
+const preProcess = (source:string) =>
+    source
+        .replace(/\</g, '&lt;')
+        .replace(/\>/g, '&gt;');
+
+function getWebviewContent() {
+    return `<!DOCTYPE html>
+  <html lang="en">
+  <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>Cat Coding</title>
+  </head>
+  <body>
+    Cat Coding <BR>
+      <img src="https://media.giphy.com/media/JIX9t2j0ZTN9S/giphy.gif" width="50" />
+      <script>
+      console.log('script test...')
+      window.addEventListener('message', event => {
+        const message = event.data;
+        console.log('Webview接收到的消息：', message);
+    });
+      </script>
+  </body>
+  </html>`;
+  }
+// this method is called when your extension is deactivated
+export function deactivate() {}
+
+function loadFile(webview:vscode.Webview, resourceRoot:string, file: string): string {
+	file = path.join(resourceRoot, file);
+	return evalHtml(webview,resourceRoot, fs.readFileSync(file).toString());
+}
+function evalHtml(webview:vscode.Webview,resourceRoot:string,html: string): string {
+	//let envReg = /\$\{(.+?)\}/ig;
+	//html = html.replace(envReg, '${env.$1}');
+	let result: string = eval('`' + html + '`');
+	// convert relative "src", "href" paths to absolute
+	let linkReg = /(src|href)\s*=\s*([`"'])(.+?)\2/ig;
+	let base: string = resourceRoot;
+	result = result.replace(linkReg, (match, ...subs) => {
+		let file = subs[2] as string;
+		if (!path.isAbsolute(file)) file = path.join(base, file);
+		console.log("file:",file)
+		if (!fs.existsSync(file)) return match;
+		let uri = webview.asWebviewUri(vscode.Uri.file(file));
+		return `${subs[0]}=${subs[1]}${uri}${subs[1]}`;
+	});
+	return result;
+}
