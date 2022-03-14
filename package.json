@@ -1,6 +1,7 @@
 {
 	"name": "mindmap-nutuml",
 	"displayName": "Nut Mindmap",
+	"icon": "icon.png",
 	"description": "Simple tool to Map text to svg mindmap",
 	"version": "0.1.0",
 	"publisher":"junfengliang",
